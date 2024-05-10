@@ -1,0 +1,183 @@
+import os
+import sqlite3
+from qgis.core import QgsProject, QgsVectorLayer, QgsCoordinateReferenceSystem
+
+# 폴더 경로
+folder_path = r'D:\test'
+
+# 폴더 내 파일 및 디렉토리 목록 가져오기
+files_and_directories = os.listdir(folder_path)
+
+# gpkg 파일 경로 찾기
+gpkg_files = [file for file in files_and_directories if file.endswith('.gpkg')]
+if not gpkg_files:
+    print("No GeoPackage files found in the folder.")
+    exit()
+
+# GeoPackage 파일 경로
+gpkg_file_path = os.path.join(folder_path, gpkg_files[0])
+
+# GeoPackage 연결
+conn = sqlite3.connect(gpkg_file_path)
+cursor = conn.cursor()
+cursor.execute("SELECT table_name, data_type FROM gpkg_contents")
+records = cursor.fetchall()
+
+# 좌표계 정의
+crs = QgsCoordinateReferenceSystem('EPSG:5181')
+
+# 초등학교, 편의점, 세종 레이어 변수 초기화
+elementary_schools_layer = None
+convenience_stores_layer = None
+sejong_layer = None
+
+for row in records:
+    if row[1] == 'features':
+        vector_path = gpkg_file_path + "|layername=" + row[0]
+        layer = QgsVectorLayer(vector_path, row[0], 'ogr')
+        
+        if layer.isValid():
+            # 좌표계 설정
+            layer.setCrs(crs)
+            
+            # 초등학교 레이어인 경우
+            if '초등학교' in row[0]:
+                elementary_schools_layer = layer
+            # 편의점 레이어인 경우
+            elif '편의점' in row[0]:
+                convenience_stores_layer = layer
+            # 세종 레이어인 경우
+            elif '세종' in row[0]:
+                sejong_layer = layer
+                
+            # QGIS 프로젝트에 레이어 추가
+            QgsProject.instance().addMapLayer(layer)
+        else:
+            print("Vector layer is not valid:", row[0], row[1])
+
+# 변수명 지정
+elementary_schools = elementary_schools_layer
+convenience_stores = convenience_stores_layer
+sejong = sejong_layer
+
+cursor.close()
+conn.close()
+
+
+import processing
+from qgis.core import QgsVectorLayer, QgsProject, QgsCoordinateReferenceSystem
+
+# 파일 경로 정의 (사용자가 입력)
+school_path = elementary_schools
+store_path = convenience_stores
+urban_path = sejong
+
+
+# 세종시 내에 있는 편의점 포인트만을 추출
+clip_stores_params = {
+    'INPUT': store_path,
+    'OVERLAY': urban_path,
+    'OUTPUT': 'memory:'
+}
+clipped_stores = processing.run("native:clip", clip_stores_params)['OUTPUT']
+
+# 세종시 내에 500미터 육각 격자 생성
+hex_grid_params = {
+    'TYPE': 4,  # 육각형
+    'EXTENT': urban_path.extent(),
+    'HSPACING': 500,
+    'VSPACING': 500,
+    'CRS': urban_path.crs(),
+    'OUTPUT': 'memory:'
+}
+hex_grid = processing.run("native:creategrid", hex_grid_params)['OUTPUT']
+
+# 격자 내 포함된 편의점 개수 계산
+count_stores_params = {
+    'POLYGONS': hex_grid,
+    'POINTS': clipped_stores,
+    'FIELD': 'NUM_STORES',  # 결과를 저장할 필드 이름
+    'OUTPUT': 'memory:'
+}
+count_stores_result = processing.run("native:countpointsinpolygon", count_stores_params)['OUTPUT']
+
+# 결과 레이어를 QGIS에 추가
+QgsProject.instance().addMapLayer(count_stores_result)
+
+
+
+
+
+
+
+
+# 세종시 폴리곤 내 초등학교 추출
+clip_school_params = {
+    'INPUT': school_path,
+    'OVERLAY': urban_path,
+    'OUTPUT': 'memory:'
+}
+clipped_school = processing.run("native:clip", clip_school_params)['OUTPUT']
+
+# 초등학교 주변 500m 버퍼 생성
+buffer_params = {
+    'INPUT': clipped_school,
+    'DISTANCE': 500,
+    'SEGMENTS': 5,
+    'DISSOLVE': False,
+    'OUTPUT': 'memory:'
+}
+buffer_layer = processing.run("native:buffer", buffer_params)['OUTPUT']
+
+# 초등학교 주변 버퍼 내에 포함된 편의점 개수 계산
+count_points_params = {
+    'POLYGONS': buffer_layer,
+    'POINTS': store_path,
+    'FIELD': 'NUM_STORES',  # 결과를 저장할 필드 이름
+    'OUTPUT': 'memory:'
+}
+count_points_result = processing.run("native:countpointsinpolygon", count_points_params)['OUTPUT']
+
+# 결과 레이어를 QGIS에 추가
+QgsProject.instance().addMapLayer(count_points_result)
+
+
+
+
+
+
+
+layer_settings  = QgsPalLayerSettings()
+
+text_format = QgsTextFormat()
+
+
+
+text_format.setFont(QFont("Arial", 12))
+
+text_format.setSize(12)
+
+buffer_settings = QgsTextBufferSettings()
+
+buffer_settings.setEnabled(True)
+
+buffer_settings.setSize(1)
+
+buffer_settings.setColor(QColor("white"))
+
+text_format.setBuffer(buffer_settings)
+
+layer_settings.setFormat(text_format)
+
+layer_settings.fieldName = "NUM_STORES"
+
+layer_settings.enabled = True
+
+layer_settings = QgsVectorLayerSimpleLabeling(layer_settings)
+
+count_points_result.setLabelsEnabled(True)
+
+count_points_result.setLabeling(layer_settings)
+
+count_points_result.triggerRepaint()
+
